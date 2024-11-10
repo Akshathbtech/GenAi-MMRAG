@@ -1,0 +1,4 @@
+.env
+data_wiki/
+qdrant_d_1/
+.ipynb_checkpoints/

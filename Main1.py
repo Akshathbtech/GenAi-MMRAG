@@ -1,6 +1,6 @@
 import os
-from io import BytesIO
 import torch
+from io import BytesIO
 from transformers import CLIPProcessor, CLIPModel
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import VectorParams, Distance, PointStruct, ScoredPoint
@@ -21,7 +21,7 @@ processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 # Initialize Qdrant client
 client = QdrantClient(url=QDRANT_URL, timeout=150)
 
-# Temporary storage for images in memory
+# In-memory dictionary to store image data
 image_storage = {}
 
 # Create Qdrant collections if they don't exist
@@ -42,24 +42,15 @@ def add_user_text_to_qdrant(user_text):
     client.upsert(collection_name="text_collection_0", points=[user_point])
     st.write("User text added to the database successfully!")
 
-# Function to add user-uploaded image to Qdrant
+# Function to add user-uploaded image to Qdrant and store in memory
 def add_user_image_to_qdrant(image):
-    # Convert image to RGB if it has an alpha channel
-    if image.mode == "RGBA":
-        image = image.convert("RGB")
-    
     image_id = str(uuid.uuid4())
-
-    # Save the image in memory (in BytesIO) for display
-    img_byte_arr = BytesIO()
-    image.save(img_byte_arr, format='JPEG')
-    img_byte_arr.seek(0)
-    image_storage[image_id] = img_byte_arr
-
-    # Debugging print statement to check if image is stored
-    print(f"Image added with ID: {image_id}")
-
-    # Process the image for embedding
+    image_data = BytesIO()
+    image.save(image_data, format="JPEG")
+    image_data.seek(0)
+    image_storage[image_id] = image_data.getvalue()
+    
+    # Process the image in-memory
     inputs = processor(images=image, return_tensors="pt").to(device)
     image_embedding = model.get_image_features(**inputs).detach().cpu().numpy().flatten().tolist()
     image_point = PointStruct(
@@ -95,17 +86,13 @@ def retrieve_similar_images(query_text, top_k=5):
     query_embedding = model.get_text_features(**query_inputs).detach().cpu().numpy().flatten().tolist()
     image_results = client.search(collection_name="image_collection_0", query_vector=query_embedding, limit=top_k)
     
-    # Retrieve images by ID from memory storage
     retrieved_images = []
     for result in image_results:
         if isinstance(result, ScoredPoint) and result.payload.get("type") == "image":
             image_id = result.payload.get("filename")
-            # Debugging print statement to verify image ID during retrieval
-            print(f"Attempting to retrieve image with ID: {image_id}")
             if image_id in image_storage:
-                retrieved_images.append(image_storage[image_id])
-            else:
-                print(f"Image ID {image_id} not found in image_storage.")
+                image_data = BytesIO(image_storage[image_id])
+                retrieved_images.append(Image.open(image_data))
     
     return retrieved_images
 
@@ -144,9 +131,7 @@ if st.button("Retrieve Results"):
     # Display image results
     st.write("### Image Retrieval Results:")
     if retrieved_images:
-        for img_byte_arr in retrieved_images:
-            img_byte_arr.seek(0)  # Reset stream position
-            image = Image.open(img_byte_arr)
-            st.image(image, caption="Retrieved Image")
+        for img in retrieved_images:
+            st.image(img, caption="Retrieved Image")
     else:
         st.write("No images to display.")

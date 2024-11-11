@@ -1,6 +1,5 @@
 import os
 from io import BytesIO
-import requests
 import torch
 from transformers import CLIPProcessor, CLIPModel
 from qdrant_client import QdrantClient
@@ -45,9 +44,19 @@ def add_user_text_to_qdrant(user_text):
 
 # Function to add user-uploaded image to Qdrant
 def add_user_image_to_qdrant(image):
-    image_id = str(uuid.uuid4())
+    # Convert image to RGB if it has an alpha channel
+    if image.mode == "RGBA":
+        image = image.convert("RGB")
     
-    # Process the image in-memory
+    image_id = str(uuid.uuid4())
+
+    # Save the image in memory (in BytesIO) for display
+    img_byte_arr = BytesIO()
+    image.save(img_byte_arr, format='JPEG')
+    img_byte_arr.seek(0)
+    image_storage[image_id] = img_byte_arr
+
+    # Process the image for embedding
     inputs = processor(images=image, return_tensors="pt").to(device)
     image_embedding = model.get_image_features(**inputs).detach().cpu().numpy().flatten().tolist()
     image_point = PointStruct(
@@ -56,9 +65,6 @@ def add_user_image_to_qdrant(image):
         payload={"type": "image", "origin": "user", "filename": image_id}
     )
     client.upsert(collection_name="image_collection_0", points=[image_point])
-
-    # Store the image in memory for retrieval
-    image_storage[image_id] = image
     st.write("User image added to the database successfully!")
 
 # Function to retrieve similar texts
@@ -86,7 +92,7 @@ def retrieve_similar_images(query_text, top_k=5):
     query_embedding = model.get_text_features(**query_inputs).detach().cpu().numpy().flatten().tolist()
     image_results = client.search(collection_name="image_collection_0", query_vector=query_embedding, limit=top_k)
     
-    # Retrieve images by ID from temporary storage
+    # Retrieve images by ID from memory storage
     retrieved_images = []
     for result in image_results:
         if isinstance(result, ScoredPoint) and result.payload.get("type") == "image":
@@ -95,7 +101,6 @@ def retrieve_similar_images(query_text, top_k=5):
                 retrieved_images.append(image_storage[image_id])
     
     return retrieved_images
-
 
 # Streamlit UI setup
 st.title("Multi-Modal Retrieval System")
@@ -132,7 +137,9 @@ if st.button("Retrieve Results"):
     # Display image results
     st.write("### Image Retrieval Results:")
     if retrieved_images:
-        for image in retrieved_images:
+        for img_byte_arr in retrieved_images:
+            img_byte_arr.seek(0)  # Reset stream position
+            image = Image.open(img_byte_arr)
             st.image(image, caption="Retrieved Image")
     else:
         st.write("No images to display.")

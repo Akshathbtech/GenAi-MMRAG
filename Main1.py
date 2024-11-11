@@ -1,5 +1,5 @@
 import os
-from pathlib import Path
+from io import BytesIO
 import requests
 import torch
 from transformers import CLIPProcessor, CLIPModel
@@ -22,16 +22,6 @@ processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 # Initialize Qdrant client
 client = QdrantClient(url=QDRANT_URL, timeout=150)
 
-# Define paths
-data_path = Path("data_wiki")
-image_path = Path("data_wiki/images")
-user_data_path = Path("user_data")
-user_image_path = user_data_path / "images"
-data_path.mkdir(exist_ok=True, parents=True)
-image_path.mkdir(exist_ok=True, parents=True)
-user_data_path.mkdir(exist_ok=True, parents=True)
-user_image_path.mkdir(exist_ok=True, parents=True)
-
 # Create Qdrant collections if they don't exist
 if not client.collection_exists("text_collection_0"):
     client.create_collection("text_collection_0", vectors_config=VectorParams(size=512, distance=Distance.COSINE))
@@ -52,19 +42,15 @@ def add_user_text_to_qdrant(user_text):
 
 # Function to add user-uploaded image to Qdrant
 def add_user_image_to_qdrant(image):
-    if image.mode == "RGBA":
-        image = image.convert("RGB")
-    
     image_id = str(uuid.uuid4())
-    image_file = user_image_path / f"user_image_{image_id}.jpg"
-    image.save(image_file)
     
+    # Process the image in-memory
     inputs = processor(images=image, return_tensors="pt").to(device)
     image_embedding = model.get_image_features(**inputs).detach().cpu().numpy().flatten().tolist()
     image_point = PointStruct(
         id=image_id,
         vector=image_embedding,
-        payload={"type": "image", "origin": "user", "filename": str(image_file)}
+        payload={"type": "image", "origin": "user", "filename": image_id}
     )
     client.upsert(collection_name="image_collection_0", points=[image_point])
     st.write("User image added to the database successfully!")
@@ -94,14 +80,14 @@ def retrieve_similar_images(query_text, top_k=5):
     query_embedding = model.get_text_features(**query_inputs).detach().cpu().numpy().flatten().tolist()
     image_results = client.search(collection_name="image_collection_0", query_vector=query_embedding, limit=top_k)
     
-    retrieved_image_paths = []
+    # Retrieve images by ID and re-create them in-memory
+    retrieved_images = []
     for result in image_results:
         if isinstance(result, ScoredPoint) and result.payload.get("type") == "image":
-            image_path = Path(result.payload.get("filename", ""))
-            if image_path.exists():
-                retrieved_image_paths.append(image_path)
+            image_id = result.payload.get("filename")
+            retrieved_images.append(image_id)
     
-    return retrieved_image_paths
+    return retrieved_images
 
 
 # Streamlit UI setup
@@ -126,7 +112,7 @@ if st.button("Add My Image") and uploaded_image is not None:
 query = st.text_input("Search articles and images:", "What is the significance of the Kesavananda Bharati case?")
 if st.button("Retrieve Results"):
     text_results = retrieve_similar_texts(query)
-    image_paths = retrieve_similar_images(query)
+    image_ids = retrieve_similar_images(query)
 
     # Display text results
     st.write("### Text Retrieval Results:")
@@ -138,8 +124,8 @@ if st.button("Retrieve Results"):
 
     # Display image results
     st.write("### Image Retrieval Results:")
-    if image_paths:
-        for path in image_paths:
-            st.image(str(path), caption="Retrieved Image")
+    if image_ids:
+        for image_id in image_ids:
+            st.write(f"Retrieved Image ID: {image_id}")
     else:
         st.write("No images to display.")

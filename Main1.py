@@ -22,6 +22,9 @@ processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 # Initialize Qdrant client
 client = QdrantClient(url=QDRANT_URL, timeout=150)
 
+# Temporary storage for images in memory
+image_storage = {}
+
 # Create Qdrant collections if they don't exist
 if not client.collection_exists("text_collection_0"):
     client.create_collection("text_collection_0", vectors_config=VectorParams(size=512, distance=Distance.COSINE))
@@ -53,6 +56,9 @@ def add_user_image_to_qdrant(image):
         payload={"type": "image", "origin": "user", "filename": image_id}
     )
     client.upsert(collection_name="image_collection_0", points=[image_point])
+
+    # Store the image in memory for retrieval
+    image_storage[image_id] = image
     st.write("User image added to the database successfully!")
 
 # Function to retrieve similar texts
@@ -80,12 +86,13 @@ def retrieve_similar_images(query_text, top_k=5):
     query_embedding = model.get_text_features(**query_inputs).detach().cpu().numpy().flatten().tolist()
     image_results = client.search(collection_name="image_collection_0", query_vector=query_embedding, limit=top_k)
     
-    # Retrieve images by ID and re-create them in-memory
+    # Retrieve images by ID from temporary storage
     retrieved_images = []
     for result in image_results:
         if isinstance(result, ScoredPoint) and result.payload.get("type") == "image":
             image_id = result.payload.get("filename")
-            retrieved_images.append(image_id)
+            if image_id in image_storage:
+                retrieved_images.append(image_storage[image_id])
     
     return retrieved_images
 
@@ -112,7 +119,7 @@ if st.button("Add My Image") and uploaded_image is not None:
 query = st.text_input("Search articles and images:", "What is the significance of the Kesavananda Bharati case?")
 if st.button("Retrieve Results"):
     text_results = retrieve_similar_texts(query)
-    image_ids = retrieve_similar_images(query)
+    retrieved_images = retrieve_similar_images(query)
 
     # Display text results
     st.write("### Text Retrieval Results:")
@@ -124,8 +131,8 @@ if st.button("Retrieve Results"):
 
     # Display image results
     st.write("### Image Retrieval Results:")
-    if image_ids:
-        for image_id in image_ids:
-            st.write(f"Retrieved Image ID: {image_id}")
+    if retrieved_images:
+        for image in retrieved_images:
+            st.image(image, caption="Retrieved Image")
     else:
         st.write("No images to display.")

@@ -56,6 +56,9 @@ def add_user_image_to_qdrant(image):
     img_byte_arr.seek(0)
     image_storage[image_id] = img_byte_arr
 
+    # Debugging print statement to check if image is stored
+    print(f"Image added with ID: {image_id}")
+
     # Process the image for embedding
     inputs = processor(images=image, return_tensors="pt").to(device)
     image_embedding = model.get_image_features(**inputs).detach().cpu().numpy().flatten().tolist()
@@ -97,8 +100,12 @@ def retrieve_similar_images(query_text, top_k=5):
     for result in image_results:
         if isinstance(result, ScoredPoint) and result.payload.get("type") == "image":
             image_id = result.payload.get("filename")
+            # Debugging print statement to verify image ID during retrieval
+            print(f"Attempting to retrieve image with ID: {image_id}")
             if image_id in image_storage:
                 retrieved_images.append(image_storage[image_id])
+            else:
+                print(f"Image ID {image_id} not found in image_storage.")
     
     return retrieved_images
 
